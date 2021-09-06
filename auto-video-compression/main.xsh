@@ -34,7 +34,7 @@ def main(path: Path,
     if stream_types != ['video', 'audio']:
         log.info('Found unexpected streams, skipping')
         return
-    audio_is_raw = info['streams'][1]['codec_name'].startswith('pcm')
+    audio_is_raw = info['streams'][1]['codec_name'].startswith('pcm') # https://trac.ffmpeg.org/wiki/audio%20types
     convert(path, copy_audio=(not audio_is_raw))
     new_info = get_video_info(path)
     assert_conversion_ok(info, new_info)
@@ -47,8 +47,10 @@ def assert_conversion_ok(info, new_info):
     video = info['streams'][0]
     new_video = new_info['streams'][0]
     log.debug('Diferences between original and converted\n' + pformat(list(diff(info, new_info))) )
-    close(video, new_video, 'start_time', TOLERANCE)
+    close(info, new_info, 'streams.0.start_time', TOLERANCE)
+    close(info, new_info, 'streams.1.start_time', TOLERANCE)
     close(info, new_info, 'format.duration', TOLERANCE)
+    close(info, new_info, 'format.start_time', TOLERANCE)
     IRRELEVANT = (
     # We expect these to change as they are related to codecs
     '''
@@ -61,10 +63,13 @@ def assert_conversion_ok(info, new_info):
     streams.0.start_pts
     streams.0.codec_name
     streams.0.codec_long_name
+    streams.1.tags.DURATION
+    streams.1.tags.ENCODER
     streams.1.codec_long_name
     streams.1.codec_name
     streams.1.sample_fmt
     streams.1.bits_per_sample
+    streams.1.start_pts
     '''
     # Things that are removed
     '''
@@ -89,10 +94,10 @@ def assert_conversion_ok(info, new_info):
     '''
     # We check if these are close in the code above
     '''
-    streams.0.start_time
     format.duration
-    streams.1.tags.DURATION
-    streams.1.tags.ENCODER
+    format.start_time
+    streams.0.start_time
+    streams.1.start_time
     ''').split()
     for i in IRRELEVANT:
         dot_lookup(info, i, parent=True)[i.split('.')[-1]] = ANY
@@ -106,14 +111,16 @@ def close(original, converted, prop, tol):
         raise ConvertionError(f'Error in {prop!r}: {original_prop=} != {converted_prop=}')
 
 def convert(path, copy_audio=False):
+    CRF = 28 # Size/Quality tradeoff. From 0 to 51. Lower is better quality. Default is 28. # https://trac.ffmpeg.org/wiki/Encode/H.265
+    PRESET = 'medium' # https://x265.readthedocs.io/en/master/cli.html#cmdoption-preset
+
     name, _ = os.path.splitext(path)
     new_path = name + '.__to_move__.mkv' # mkv is the best container, open and flexible
-    audio = ['-c:a', 'copy'] if copy_audio else ['-c:a', 'aac', '-b:a', '192']
-    ./vendored/ffmpeg -y -i @(path) -c:v libx265 -crf 28 -preset medium @(audio) @(new_path)
+    audio = ['-c:a', 'copy'] if copy_audio else ['-c:a', 'libopus', '-b:a', '192k']
+    ./vendored/ffmpeg -y -i @(path) -c:v libx265 -crf @(CRF) -preset medium @(audio) @(new_path)
     # save old path to someplace
     os.rename(path, f'{path}.bak') # TODO: check exists
     os.rename(new_path, f'{name}.mkv')
-
 
 
 def get_vmaf(): # todo:  further investigate this

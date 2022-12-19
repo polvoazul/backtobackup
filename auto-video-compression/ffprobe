@@ -1,0 +1,3 @@
+#!/bin/bash
+
+exec docker run -i --rm -u $UID:$GROUPS -v "$PWD:$PWD" -w "$PWD" --entrypoint=/ffprobe mwader/static-ffmpeg:5.1.2 "$@"

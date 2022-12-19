@@ -1,6 +1,7 @@
 #!/usr/bin/env xonsh
-xontrib bashisms
+xontrib load bashisms
 set -e
+
 import typer
 from typing import Optional
 from pathlib import Path
@@ -11,12 +12,10 @@ from loguru import logger as log
 
 class ConvertionError(Exception): pass
 
-
 MB = int(1e6)
 
-
 def main(path: Path,
-    BIGGER_THAN_THIS_BITRATE_CONVERT: Optional[int] = 20 * MB,
+    min_bitrate: Optional[int] = 20 * MB,
 
 
 
@@ -27,15 +26,19 @@ def main(path: Path,
     log.debug(pformat(info))
     bitrate = int(info['format']['bit_rate'])
     log.info(f'File bitrate: {humanize.naturalsize(bitrate)}/s')
-    if bitrate < BIGGER_THAN_THIS_BITRATE_CONVERT:
+    if bitrate < min_bitrate:
         log.info('Bitrate is already small. Not worth it to convert')
         return
     stream_types = [s['codec_type'] for s in info['streams']]
-    if stream_types != ['video', 'audio']:
-        log.info('Found unexpected streams, skipping')
+    if stream_types != ['video', 'audio'] and stream_types != ['video']:
+        log.info(f'Found unexpected streams: {stream_types}, skipping')
         return
-    audio_is_raw = info['streams'][1]['codec_name'].startswith('pcm') # https://trac.ffmpeg.org/wiki/audio%20types
-    convert(path, copy_audio=(not audio_is_raw))
+    has_audio = 'audio' in stream_types
+    if has_audio:
+        audio_is_raw = info['streams'][1]['codec_name'].startswith('pcm') # https://trac.ffmpeg.org/wiki/audio%20types
+	convert(path, copy_audio=(not audio_is_raw))
+    else:
+	convert(path, has_audio=False)
     new_info = get_video_info(path)
     assert_conversion_ok(info, new_info)
 
@@ -110,25 +113,25 @@ def close(original, converted, prop, tol):
     if not math.isclose(float(original_prop), float(converted_prop), abs_tol=tol):
         raise ConvertionError(f'Error in {prop!r}: {original_prop=} != {converted_prop=}')
 
-def convert(path, copy_audio=False):
+def convert(path, copy_audio=False, has_audio=True):
     CRF = 28 # Size/Quality tradeoff. From 0 to 51. Lower is better quality. Default is 28. # https://trac.ffmpeg.org/wiki/Encode/H.265
     PRESET = 'medium' # https://x265.readthedocs.io/en/master/cli.html#cmdoption-preset
-
     name, _ = os.path.splitext(path)
     new_path = name + '.__to_move__.mkv' # mkv is the best container, open and flexible
     audio = ['-c:a', 'copy'] if copy_audio else ['-c:a', 'libopus', '-b:a', '192k']
-    ./vendored/ffmpeg -y -i @(path) -c:v libx265 -crf @(CRF) -preset medium @(audio) @(new_path)
+    ./ffmpeg -y -i @(path) -c:v libx265 -crf @(CRF) -preset medium @(audio) @(new_path)
     # save old path to someplace
-    os.rename(path, f'{path}.bak') # TODO: check exists
+    file, extension = path.rsplit('.', 1)
+    os.rename(path, f'{file}.bak.{extension}') # TODO: check exists
     os.rename(new_path, f'{name}.mkv')
 
 
 def get_vmaf(): # todo:  further investigate this
-    ./vendored/ffmpeg -i in.mkv.bak -i in.mkv -lavfi libvmaf="model_path=vendored/vmaf_v0.6.1.pkl" -f null -
+    ./ffmpeg -i in.mkv.bak -i in.mkv -lavfi libvmaf -f null -
 
 
 def get_video_info(filename):
-    probe = $(./vendored/ffprobe -v quiet -print_format json -show_format -show_streams @(filename))
+    probe = $(./ffprobe -v quiet -print_format json -show_format -show_streams @(filename))
     return json.loads(probe)
 
 

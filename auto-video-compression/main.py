@@ -1,25 +1,22 @@
-#!/usr/bin/env xonsh
-xontrib load bashisms
-set -e
+#!/usr/bin/env python3
 
+import pprint
+from auto_video_compression.ffmpeg import get_video_info, get_vmaf, convert, CONVERT_CONFIG
 import typer
-from typing import Optional
+from typing import Dict, Optional
 from pathlib import Path
-import json, os, math
+import json, os.path, math
 from pprint import pformat
 import humanize
 from loguru import logger as log
 
 class ConvertionError(Exception): pass
 
+
 MB = int(1e6)
 
 def main(path: Path,
-    min_bitrate: Optional[int] = 20 * MB,
-
-
-
-
+    min_bitrate: int = 20 * MB,
 ):
     info = get_video_info(path)
     log.info(f'Considering file: {info["format"]["filename"]}')
@@ -33,19 +30,45 @@ def main(path: Path,
     if stream_types != ['video', 'audio'] and stream_types != ['video']:
         log.info(f'Found unexpected streams: {stream_types}, skipping')
         return
-    has_audio = 'audio' in stream_types
-    if has_audio:
-        audio_is_raw = info['streams'][1]['codec_name'].startswith('pcm') # https://trac.ffmpeg.org/wiki/audio%20types
-	convert(path, copy_audio=(not audio_is_raw))
-    else:
-	convert(path, has_audio=False)
-    new_info = get_video_info(path)
-    assert_conversion_ok(info, new_info)
+    import time
+    start_time = time.time()
+    new_path = convert_video(path, info, stream_types)
+    elapsed_time = time.time() - start_time
+    score = assert_conversion_ok(path, new_path)
+    filesize = path.stat().st_size
+    new_filesize = new_path.stat().st_size
+    print(f'Conversion complete!\n')
+    print(f'Configs: {CONVERT_CONFIG}')
+    print(f'Convertion time: {float(info["format"]["duration"])/elapsed_time:.2f}x - {humanize.naturaldelta(elapsed_time)}')
+    print(f'Similarity score = {score:.1f}.')
+    print(f'Old filesize: {humanize.naturalsize(filesize)}.')
+    print(f'New filesize: {humanize.naturalsize(new_filesize)}.')
+    print(f'Reduction = {humanize.naturalsize(filesize - new_filesize)} ({100*(filesize - new_filesize)/filesize:.1f})%')
+    log.info('Done')
 
 from dictdiffer import diff, dot_lookup
 from unittest.mock import ANY
 
-def assert_conversion_ok(info, new_info):
+def convert_video(path, info, stream_types):
+    has_audio = 'audio' in stream_types
+    if has_audio:
+        audio_is_raw = info['streams'][1]['codec_name'].startswith('pcm') # https://trac.ffmpeg.org/wiki/audio%20types
+        return convert(path, copy_audio=(not audio_is_raw))
+    else:
+        return convert(path, has_audio=False)
+
+def assert_conversion_ok(path, new_path):
+    similarity_score = get_vmaf(path, new_path)
+    log.info(f'Simlarity scores: {pprint.pformat(similarity_score)}')
+    assert similarity_score['vmaf']['mean'] > 95.0
+    assert similarity_score['vmaf']['min'] > 90.0
+
+    return similarity_score['vmaf']['mean']
+    # TODO: Check metadata (use code below)
+
+def _check_metadata(path, new_path):
+    info = get_video_info(path)
+    new_info = get_video_info(new_path)
     TOLERANCE = 1 / 20 # a bit more than one frame
     video = info['streams'][0]
     new_video = new_info['streams'][0]
@@ -112,30 +135,6 @@ def close(original, converted, prop, tol):
     original_prop, converted_prop = dot_lookup(original, prop), dot_lookup(converted, prop)
     if not math.isclose(float(original_prop), float(converted_prop), abs_tol=tol):
         raise ConvertionError(f'Error in {prop!r}: {original_prop=} != {converted_prop=}')
-
-def convert(path, copy_audio=False, has_audio=True):
-    CRF = 28 # Size/Quality tradeoff. From 0 to 51. Lower is better quality. Default is 28. # https://trac.ffmpeg.org/wiki/Encode/H.265
-    PRESET = 'medium' # https://x265.readthedocs.io/en/master/cli.html#cmdoption-preset
-    name, _ = os.path.splitext(path)
-    new_path = name + '.__to_move__.mkv' # mkv is the best container, open and flexible
-    audio = ['-c:a', 'copy'] if copy_audio else ['-c:a', 'libopus', '-b:a', '192k']
-    ./ffmpeg -y -i @(path) -c:v libx265 -crf @(CRF) -preset medium @(audio) @(new_path)
-    # save old path to someplace
-    file, extension = path.rsplit('.', 1)
-    os.rename(path, f'{file}.bak.{extension}') # TODO: check exists
-    os.rename(new_path, f'{name}.mkv')
-
-
-def get_vmaf(): # todo:  further investigate this
-    ./ffmpeg -i in.mkv.bak -i in.mkv -lavfi libvmaf -f null -
-
-
-def get_video_info(filename):
-    probe = $(./ffprobe -v quiet -print_format json -show_format -show_streams @(filename))
-    return json.loads(probe)
-
-
-
 
 if __name__ == "__main__":
     typer.run(main)

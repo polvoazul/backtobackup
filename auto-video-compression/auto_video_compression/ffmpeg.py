@@ -30,11 +30,11 @@ def get_video_info(filename: Path):
         '-print_format', 'json',    # Output format as JSON
         '-show_format',             # Show format information
         '-show_streams',            # Show stream information
+        '-count_frames',            # count frames in nb_read_frames
         str(filename),                   # Replace with the actual input file path
     ]
     result = run(ffprobe_command)
     video_info = json.loads(result.stdout)
-    print(video_info)
     return video_info
 
 class _Score(TypedDict):
@@ -95,6 +95,7 @@ def convert(path: Path, copy_audio=False, has_audio=True) -> Path:
         f'{BASE}/ffmpeg', '-y',
         '-i', str(path),
         '-c:v', 'libx265', '-crf', CONVERT_CONFIG['CRF'], '-preset', CONVERT_CONFIG['PRESET'],
+                '-vsync', '0', '-enc_time_base', '-1', '-video_track_timescale', '15360',
         *audio,
         str(out_path),
     ]

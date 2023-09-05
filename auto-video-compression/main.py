@@ -24,7 +24,7 @@ MB = int(1e6)
 def main(path: Path,
     min_bitrate: int = 20 * MB,
 ):
-    info = get_video_info(path)
+    info = get_video_info(path, fast=True)
     log.info(f'Considering file: {info["format"]["filename"]}')
     log.debug(pformat(info))
     bitrate = int(info['format']['bit_rate'])

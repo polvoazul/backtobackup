@@ -21,16 +21,19 @@ def run(command: List[str], capture=True):
     else:
         return subprocess.run(command, check=True)
 
-def get_video_info(filename: Path):
+def get_video_info(filename: Path, fast=False):
     log.info(f'Getting video {filename!r} info')
     assert filename.is_file()
+    slow_commands = [
+        '-count_frames',            # count frames in nb_read_frames
+    ]
     ffprobe_command = [
         f'{BASE}/ffprobe',
         '-v', 'quiet',             # Quiet mode
         '-print_format', 'json',    # Output format as JSON
         '-show_format',             # Show format information
         '-show_streams',            # Show stream information
-        '-count_frames',            # count frames in nb_read_frames
+        *([] if fast else slow_commands),
         str(filename),                   # Replace with the actual input file path
     ]
     result = run(ffprobe_command)

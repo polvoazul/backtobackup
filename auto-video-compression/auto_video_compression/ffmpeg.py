@@ -94,10 +94,10 @@ CONVERT_CONFIG = dict(
 
 Change = Tuple[Literal['unk','video', 'audio'], Literal['copy', 'audio']]
 
-def convert(path: Path, changes: List[Change], container) -> Path:
+def convert(path: Path, changes: List[Change], container, scratch_path: Path) -> Path:
     assert path.is_file()
     name = path.stem
-    out_path = Path(str(name) + f'.CONVERTED.{container}') 
+    out_path = scratch_path / Path(str(name) + f'.CONVERTED.{container}') 
     def instruction(index, c: Change):
         match c[0]:
             case 'video': out = [f'-map', f'0:{index}', f'-c:{index}']

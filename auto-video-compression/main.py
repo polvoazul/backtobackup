@@ -25,6 +25,7 @@ MB = int(1e6)
 
 def main(path: Path,
     min_bitrate: int = 20 * MB,
+    scratch_path: Path = '.',
 ):
     info = get_video_info(path, fast=True)
     log.info(f'Considering file: {info["format"]["filename"]}')
@@ -40,7 +41,7 @@ def main(path: Path,
         # TODO: if audio stream is not stereo / mono, bail on convertion
         # return
     start_time = time.time()
-    new_path = convert_video(path, info, stream_types)
+    new_path = convert_video(path, info, stream_types, scratch_path)
     elapsed_time = time.time() - start_time
     score = assert_conversion_ok(path, new_path)
     filesize = path.stat().st_size
@@ -70,10 +71,10 @@ def define_changes(stream):
             else: return ('audio', 'copy') # dont convert if its not raw... not really worth it
         case _: return ('unk', 'copy')
 
-def convert_video(path: Path, info, stream_types):
+def convert_video(path: Path, info, stream_types, scratch_path: Path):
     has_audio = 'audio' in stream_types
     changes = [define_changes(stream) for stream in info['streams']]
-    return convert(path, changes, choose_container(path.suffix.lstrip('.'), stream_types))
+    return convert(path, changes, choose_container(path.suffix.lstrip('.'), stream_types), scratch_path)
 
 def assert_conversion_ok(path, new_path):
     similarity_score = get_vmaf(path, new_path)

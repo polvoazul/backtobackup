@@ -1,11 +1,13 @@
 from pathlib import Path
 from loguru import logger as log
+import platform
 import json, os.path, math
-from typing import Dict, Optional, List, TypedDict
+from typing import Dict, Literal, Optional, List, Tuple, TypedDict
 import subprocess
 import importlib.resources
 
 BASE = importlib.resources.files('auto_video_compression').parent # type: ignore
+BASE = ''
 
 class FfmpegError(Exception): 
     def __init__(self, e: subprocess.CalledProcessError):
@@ -28,7 +30,7 @@ def get_video_info(filename: Path, fast=False):
         '-count_frames',            # count frames in nb_read_frames
     ]
     ffprobe_command = [
-        f'{BASE}/ffprobe',
+        f'{BASE}ffprobe',
         '-v', 'quiet',             # Quiet mode
         '-print_format', 'json',    # Output format as JSON
         '-show_format',             # Show format information
@@ -70,7 +72,7 @@ def get_vmaf(f1: Path, f2: Path) -> Similarity: # todo:  further investigate thi
     import tempfile, json_stream
     with tempfile.NamedTemporaryFile(mode='w+', suffix='.json', dir='.') as f:
         ffmpeg_command = [
-            f'{BASE}/ffmpeg',
+            f'{BASE}ffmpeg',
             '-i', str(f1),   # Input file 1
             '-i', str(f2),   # Input file 2
             '-lavfi', f"[0:v][1:v]libvmaf=feature='name=psnr':log_fmt=json:log_path={Path(f.name).name}:n_subsample=10",  # VMAF filter with PSNR mode and JSON output
@@ -89,19 +91,53 @@ CONVERT_CONFIG = dict(
     CRF = '28', # Size/Quality tradeoff. From 0 to 51. Lower is better quality. Default is 28. # https://trac.ffmpeg.org/wiki/Encode/H.265
     PRESET = 'medium' # https://x265.readthedocs.io/en/master/cli.html#cmdoption-preset # ultrafast superfast veryfast faster fast *medium* slow slower veryslow
 )
-def convert(path: Path, copy_audio=False, has_audio=True) -> Path:
+
+Change = Tuple[Literal['unk','video', 'audio'], Literal['copy', 'audio']]
+
+def convert(path: Path, changes: List[Change], container) -> Path:
     assert path.is_file()
     name = path.stem
-    out_path = Path(str(name) + '.CONVERTED.mkv') # mkv is the best container, open and flexible
-    audio = ['-c:a', 'copy'] if copy_audio else ['-c:a', 'libopus', '-b:a', '192k']
+    out_path = Path(str(name) + f'.CONVERTED.{container}') 
+    def instruction(index, c: Change):
+        match c[0]:
+            case 'video': out = [f'-map', f'0:{index}', f'-c:{index}']
+            case 'audio': out = [f'-map', f'0:{index}', f'-c:{index}']
+            case _:
+                assert c[1] == 'copy'
+                return ['-map', f'0:{index}', '-c', 'copy']
+        match c:
+            case ('video', 'convert'):
+                out += ['libx265', '-crf', CONVERT_CONFIG['CRF'], '-preset', CONVERT_CONFIG['PRESET'],
+                        '-vsync', '0', '-enc_time_base', '-1', '-video_track_timescale', '15360',
+                ]
+            case ('video', 'copy'):
+                out += ['copy']
+            case ('audio', 'convert'):
+                out += choose_audio_codec(index, container)
+            case _:
+                assert False
+        return out
+    instructions = [instruction(i, c) for i, c in enumerate(changes)]
+    # audio = ['-c:a', 'copy'] if copy_audio else ['-c:a', 'libopus', '-b:a', '192k']
+    flatten = lambda z: [x for y in z for x in y]
     ffmpeg_command = [
-        f'{BASE}/ffmpeg', '-y',
+        f'{BASE}ffmpeg', '-y',
         '-i', str(path),
-        '-c:v', 'libx265', '-crf', CONVERT_CONFIG['CRF'], '-preset', CONVERT_CONFIG['PRESET'],
-                '-vsync', '0', '-enc_time_base', '-1', '-video_track_timescale', '15360',
-        *audio,
+        *flatten(instructions),
         str(out_path),
     ]
     run(ffmpeg_command, capture=False)
     assert out_path.is_file() and path.is_file()
     return out_path
+
+def choose_audio_codec(index, container):
+    match container:
+        case 'mkv' | 'mka' | 'mp4' | 'webm' | 'mp4' | '.ts':
+            return ['libopus', '-b:a', '192k']
+        case 'mov' :
+            if platform.system() == 'Darwin':
+                return ['aac_at', f'-q:{index}', '2'] # ~250kb/s
+            else:
+                return ['aac', f'-b:{index}', '256kb']
+        case _:
+            assert False, f"We don't know how to deal with this extension {container=}"

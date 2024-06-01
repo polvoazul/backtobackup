@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
 import datetime
+from decimal import Decimal
 import difflib, math, pprint, time, typer
+import re
 import os
 os.environ["LOGURU_LEVEL"] = "INFO"
 
@@ -33,9 +35,10 @@ def main(path: Path,
         log.info('Bitrate is already small. Not worth it to convert')
         return
     stream_types = [s['codec_type'] for s in info['streams']]
-    if stream_types != ['video', 'audio'] and stream_types != ['video']:
+    if stream_types != ['video', 'audio'] and stream_types != ['video']: # TODO: if other streams, try to mantain them, by using the same container
         log.info(f'Found unexpected streams: {stream_types}, skipping')
-        return
+        # TODO: if audio stream is not stereo / mono, bail on convertion
+        # return
     start_time = time.time()
     new_path = convert_video(path, info, stream_types)
     elapsed_time = time.time() - start_time
@@ -51,14 +54,26 @@ def main(path: Path,
     print(f'New filesize:     {humanize.naturalsize(new_filesize)}')
     log.info('Done')
 
+def choose_container(input_container, stream_types):
+    '''mkv is the best container, open and flexible. But we should mimic the original file's container, so that we can deal with crazy streams'''
+    if stream_types == ['audio', 'video'] or stream_types == ['video', 'audio']: 
+        return 'mkv'
+    else: return input_container
+    return 'mkv' 
 
-def convert_video(path, info, stream_types):
+def define_changes(stream):
+    match stream['codec_type']:
+        case 'video': return ('video', 'convert')
+        case 'audio':
+            audio_is_raw = stream['codec_name'].startswith('pcm') # https://trac.ffmpeg.org/wiki/audio%20types
+            if audio_is_raw: return ('audio', 'convert')
+            else: return ('audio', 'copy') # dont convert if its not raw... not really worth it
+        case _: return ('unk', 'copy')
+
+def convert_video(path: Path, info, stream_types):
     has_audio = 'audio' in stream_types
-    if has_audio:
-        audio_is_raw = info['streams'][1]['codec_name'].startswith('pcm') # https://trac.ffmpeg.org/wiki/audio%20types
-        return convert(path, copy_audio=(not audio_is_raw))
-    else:
-        return convert(path, has_audio=False)
+    changes = [define_changes(stream) for stream in info['streams']]
+    return convert(path, changes, choose_container(path.suffix.lstrip('.'), stream_types))
 
 def assert_conversion_ok(path, new_path):
     similarity_score = get_vmaf(path, new_path)
@@ -73,11 +88,16 @@ def _check_metadata(path, new_path):
     log.debug('Checking metadata')
     flat_n_sort = lambda d: dict(sorted((k.lower(), v) for k, v in flatten_dict(d).items()))
     info = flat_n_sort(get_video_info(path))
-    new_info = flat_n_sort(get_video_info(new_path))
+    unsorted_new_info = get_video_info(new_path)
+    n_streams = len(unsorted_new_info['streams'])
+    new_info = flat_n_sort(unsorted_new_info)
     # log.debug('Diferences between original and converted\n' + pformat(list(diff(info, new_info))) )
     TOLERANCE = 1 / 20 # a bit more than one frame
-    close(info, new_info, 'streams.0.start_time', TOLERANCE)
-    close(info, new_info, 'streams.1.start_time', TOLERANCE)
+    for idx in range(n_streams):
+        close(info, new_info, f'streams.{idx}.start_time', TOLERANCE)
+        close(info, new_info, f'streams.{idx}.nb_read_frames', 10) # 10 Frames tolerance
+        close_decimal(info, new_info, f'streams.{idx}.r_frame_rate', TOLERANCE)
+        close_decimal(info, new_info, f'streams.{idx}.avg_frame_rate', TOLERANCE)
     close(info, new_info, 'format.duration', TOLERANCE)
     close(info, new_info, 'format.start_time', TOLERANCE)
     
@@ -93,96 +113,98 @@ def _check_metadata(path, new_path):
     format.format_long_name
     format.format_name
     format.tags.encoder
-    streams.0.tags.encoder
-    streams.0.tags.duration
-    streams.0.profile
-    streams.0.codec_time_base
-    streams.0.level
-    streams.0.start_pts
-    streams.0.extradata_size
-    streams.0.codec_name
-    streams.0.codec_long_name
-    streams.0.codec_tag
-    streams.0.codec_tag_string
-    streams.0.refs
-    streams.0.has_b_frames
-    streams.1.codec_tag
-    streams.1.codec_tag_string
-    streams.1.tags.encoder
-    streams.1.codec_long_name
-    streams.1.codec_name
-    streams.1.sample_fmt
-    streams.1.bits_per_sample
-    streams.1.start_pts
+    streams.\\d+.tags.encoder
+    streams.\\d+.tags.duration
+    streams.\\d+.profile
+    streams.\\d+.codec_time_base
+    streams.\\d+.level
+    streams.\\d+.start_pts
+    streams.\\d+.extradata_size
+    streams.\\d+.codec_name
+    streams.\\d+.codec_long_name
+    streams.\\d+.codec_tag
+    streams.\\d+.codec_tag_string
+    streams.\\d+.refs
+    streams.\\d+.has_b_frames
+    streams.\\d+.codec_tag
+    streams.\\d+.codec_tag_string
+    streams.\\d+.tags.encoder
+    streams.\\d+.codec_long_name
+    streams.\\d+.codec_name
+    streams.\\d+.sample_fmt
+    streams.\\d+.bits_per_sample
+    streams.\\d+.start_pts
     '''
     # Things that are removed
     '''
-    streams.0.color_space
-    streams.0.color_transfer
-    streams.0.color_primaries
-    streams.0.field_order
-    streams.0.is_avc
-    streams.0.nal_length_size
-    streams.0.bits_per_raw_sample
-    streams.0.id
-    streams.1.id
+    streams.\\d+.color_space
+    streams.\\d+.color_transfer
+    streams.\\d+.color_primaries
+    streams.\\d+.field_order
+    streams.\\d+.is_avc
+    streams.\\d+.nal_length_size
+    streams.\\d+.bits_per_raw_sample
+    streams.\\d+.id
+    streams.\\d+.id
     '''
     # These are removed, but moved under 'tags.*'. We check equality above.
     '''
-    streams.0.duration
-    streams.0.tags.duration
-    streams.1.duration
-    streams.1.tags.duration
-    streams.0.duration_ts
-    streams.1.duration_ts
+    streams.\\d+.duration
+    streams.\\d+.tags.duration
+    streams.\\d+.duration_ts
+    streams.\\d+.start_time
     '''
     # These are removed cause of https://superuser.com/questions/1523944/whats-the-difference-between-coded-width-and-width-in-ffprobe
     '''
-    streams.0.coded_height
-    streams.0.coded_width
+    streams.\\d+.coded_height
+    streams.\\d+.coded_width
     '''
-    # We are using nb_read_frames. It is more accurate.
+    # We are using nb_read_frames. It is more accurate. It is checked in upwards code.
     '''
-    streams.0.nb_frames
-    streams.1.nb_frames
+    streams.\\d+.nb_frames
+    streams.\\d+.nb_read_frames
     '''
     # Things that are added
     '''
-    streams.1.profile
-    streams.1.channel_layout
+    streams.\\d+.profile
+    streams.\\d+.channel_layout
     '''
     # Actually changed
     '''
     format.size
     format.bit_rate
     format.filename
-    streams.0.bit_rate
-    streams.1.bit_rate
+    streams.\\d+.bit_rate
     '''
     # We check if these are close in the code above
     '''
     format.duration
     format.start_time
-    streams.0.start_time
-    streams.1.start_time
+    streams.\\d+.r_frame_rate
+    streams.\\d+.avg_frame_rate
     '''
     # We check these in code above
     '''
-    streams.0.tags.language 
-    streams.1.tags.language 
+    streams.\\d+.tags.language 
     '''
     # TODO: this is changing, but i cant make it not :(
     '''
-    streams.0.time_base
-    streams.1.time_base
+    streams.\\d+.time_base
+    '''
+    # I don't care enough to research these
+    '''
+    streams.\\d+.color_range
     '''
     ).split()
+    IRRELEVANT = '|'.join(IRRELEVANT) 
+    def irrelevant(key):
+        return re.match(IRRELEVANT, key)
     # for i in IRRELEVANT:
     #     dictdiff.dot_lookup(info, i, parent=True)[i.split('.')[-1]] = ANY
     #     dictdiff.dot_lookup(new_info, i, parent=True)[i.split('.')[-1]] = ANY
     log.debug(f'Info: {pformat(info)}')
     log.debug(f'New Info: {pformat(new_info)}')
-    lines = lambda d: [f'{k}: {v}' for k, v in d.items() if k not in IRRELEVANT]
+    lines = lambda d: [f'{k}: {v}' for k, v in d.items() if not irrelevant(k)]
     diff = list(difflib.unified_diff(lines(info), lines(new_info)))
     if diff:
         string_diff = '\n'.join(diff)
@@ -195,17 +217,28 @@ def _check_metadata(path, new_path):
 def _compare_durations(info, new_info):
     TOLERANCE = 0.2 # TODO: time_base is being changed. Look into that
     def parse(time):
-        obj = datetime.datetime.strptime(time.rstrip('0'), '%H:%M:%S.%f')
-        return obj.hour * 3600 + obj.minute * 60 + obj.second + obj.microsecond / 1e6
-    if d := info.get('streams.0.duration'):
-        new_d = parse(new_info['streams.0.tags.duration'])
-        if not math.isclose(float(d), new_d, abs_tol=TOLERANCE):
-            raise ConvertionError(f'Error in duration of video: {d=} != {new_d=}')
-    if d := info.get('streams.1.duration'):
-        new_d = parse(new_info['streams.1.tags.duration'])
-        if not math.isclose(float(d), new_d, abs_tol=TOLERANCE):
-            raise ConvertionError(f'Error in duration of audio: {d=} != {new_d=}')
+        try:
+            obj = datetime.datetime.strptime(time.rstrip('0'), '%H:%M:%S.%f')
+            return obj.hour * 3600 + obj.minute * 60 + obj.second + obj.microsecond / 1e6
+        except ValueError: pass
+        return float(time)
+    n_streams = info['format.nb_streams']
+    for idx in range(n_streams):
+        if d := info.get('streams.0.duration'):
+            new_d = parse(new_info.get('streams.0.tags.duration') or new_info['streams.0.duration'])
+            if not math.isclose(float(d), new_d, abs_tol=TOLERANCE):
+                raise ConvertionError(f'Error in duration of stream {idx}: {d=} != {new_d=}')
 
+
+def close_decimal(original, converted, prop, tol):
+    original_prop, converted_prop = original[prop], converted[prop]
+    if original_prop == converted_prop: return True
+    a, b = original_prop.split('/')
+    original_prop = Decimal(a) / Decimal(b)
+    a, b = converted_prop.split('/')
+    converted_prop = Decimal(a) / Decimal(b)
+    if not math.isclose(original_prop, converted_prop, abs_tol=tol):
+        raise ConvertionError(f'Error in {prop!r}: {original_prop=} != {converted_prop=}')
 
 def close(original, converted, prop, tol):
     original_prop, converted_prop = original[prop], converted[prop]

@@ -141,7 +141,6 @@ def _check_metadata(path, new_path):
     streams.\\d+.color_space
     streams.\\d+.color_transfer
     streams.\\d+.color_primaries
-    streams.\\d+.field_order
     streams.\\d+.is_avc
     streams.\\d+.nal_length_size
     streams.\\d+.bits_per_raw_sample

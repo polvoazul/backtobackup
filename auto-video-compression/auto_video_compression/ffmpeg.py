@@ -106,16 +106,16 @@ def convert(path: Path, changes: List[Change], container, scratch_path: Path) ->
                 assert c[1] == 'copy'
                 return ['-map', f'0:{index}', '-c', 'copy']
         match c:
+            case (_, 'copy'):
+                out += ['copy']
             case ('video', 'convert'):
                 out += ['libx265', '-crf', CONVERT_CONFIG['CRF'], '-preset', CONVERT_CONFIG['PRESET'],
                         '-vsync', '0', '-enc_time_base', '-1', '-video_track_timescale', '15360',
                 ]
-            case ('video', 'copy'):
-                out += ['copy']
             case ('audio', 'convert'):
                 out += choose_audio_codec(index, container)
             case _:
-                assert False
+                assert False, f"Instruction unclear: {c!r}"
         return out
     instructions = [instruction(i, c) for i, c in enumerate(changes)]
     # audio = ['-c:a', 'copy'] if copy_audio else ['-c:a', 'libopus', '-b:a', '192k']

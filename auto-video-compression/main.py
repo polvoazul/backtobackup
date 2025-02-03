@@ -77,11 +77,14 @@ def convert_video(path: Path, info, stream_types, scratch_path: Path):
     return convert(path, changes, choose_container(path.suffix.lstrip('.'), stream_types), scratch_path)
 
 def assert_conversion_ok(path, new_path):
+    error = False
     similarity_score = get_vmaf(path, new_path)
     log.debug(f'Simlarity scores: {pprint.pformat(similarity_score)}')
-    assert similarity_score['vmaf']['mean'] > 95.0
-    assert similarity_score['vmaf']['min'] > 90.0
+    if similarity_score['vmaf']['mean'] > 95.0 or similarity_score['vmaf']['min'] > 90.0:
+        error = True
+        log.error(f"VMAF is bad: {similarity_score['vmaf']}")
     _check_metadata(path, new_path)
+    assert not error
     return similarity_score['vmaf']['mean']
     # TODO: Check metadata (use code below)
 
@@ -233,6 +236,7 @@ def _compare_durations(info, new_info):
 def close_decimal(original, converted, prop, tol):
     original_prop, converted_prop = original[prop], converted[prop]
     if original_prop == converted_prop: return True
+    log.info((original_prop, converted_prop))
     a, b = original_prop.split('/')
     original_prop = Decimal(a) / Decimal(b)
     a, b = converted_prop.split('/')

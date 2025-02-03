@@ -111,6 +111,7 @@ def convert(path: Path, changes: List[Change], container, scratch_path: Path) ->
             case ('video', 'convert'):
                 out += ['libx265', '-crf', CONVERT_CONFIG['CRF'], '-preset', CONVERT_CONFIG['PRESET'],
                         '-vsync', '0', '-enc_time_base', '-1', '-video_track_timescale', '15360',
+                        '-copyts',
                 ]
             case ('audio', 'convert'):
                 out += choose_audio_codec(index, container)
